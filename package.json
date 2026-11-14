@@ -1,0 +1,16 @@
+{
+  "name": "codi-pey-hackathon",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm --workspace=@codi-pey/api run dev",
+    "dev:web": "npm --workspace=@codi-pey/web run dev",
+    "build": "npm --workspace=@codi-pey/contracts run build && npm --workspace=@codi-pey/api run build && npm --workspace=@codi-pey/web run build",
+    "test": "npm --workspace=@codi-pey/api run test",
+    "typecheck": "npm --workspace=@codi-pey/contracts run typecheck && npm --workspace=@codi-pey/api run typecheck && npm --workspace=@codi-pey/web run typecheck"
+  }
+}
