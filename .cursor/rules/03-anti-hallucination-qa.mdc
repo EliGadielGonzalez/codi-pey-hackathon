@@ -1,0 +1,22 @@
+---
+description: "Reglas anti-alucinación y QA basado en evidencia. Siempre activo."
+alwaysApply: true
+---
+
+# VERIFICACIÓN Y TOLERANCIA CERO A ALUCINACIONES
+
+## 1. Clasificación de Afirmaciones
+
+| Estado | Cuándo usarlo |
+|---|---|
+| `CONFIRMED` | Leíste el archivo exacto o ejecutaste el comando y viste el resultado en esta sesión |
+| `CONTRADICTED` | Fuente directa incompatible con la hipótesis |
+| `UNKNOWN` | No se ejecutó, no se leyó o faltan datos |
+
+## 2. Reglas de Pruebas y Comandos
+
+1. **Nunca reportes `PASS` sin ejecutar:** Si no corriste el test o el build después de tu última edición, repórtalo como `NOT_RUN` o `STALE`.
+2. **Conserva el comando y el código de salida:** No resumas un log como "todo pasó" si hubo warnings críticos, tests skipped o assertions relajadas.
+3. **No debilites tests para que pasen:** Si un test falla por un bug real, arregla el código, no borres ni suavices la aserción.
+4. **Compilar ≠ Funcionar:** Que `vite build` o `tsc` pasen no demuestra que el endpoint responda ni que el botón haga lo que debe en runtime.
+5. **Distingue entornos:** Reporta por separado pruebas locales, CI remoto y producción.

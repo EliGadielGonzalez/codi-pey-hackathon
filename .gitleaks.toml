@@ -1,0 +1,19 @@
+title = "Cursor Hackathon Kit - gitleaks"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fixtures de pruebas y dependencias"
+targetRules = ["generic-api-key"]
+paths = [
+  '''(^|/)tests?/''',
+  '''(^|/)__tests__/''',
+  '''(^|/)vendor/''',
+  '''(^|/)node_modules/''',
+]
+
+[[allowlists]]
+description = "Marcadores placeholder en plantillas .env.example"
+targetRules = ["generic-api-key"]
+regexes = ['''CAMBIAR_[A-Za-z0-9_]+''', '''CHANGE_ME_[A-Za-z0-9_]+''']

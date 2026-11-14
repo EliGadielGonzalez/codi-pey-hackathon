@@ -1,0 +1,51 @@
+---
+description: "Backend Guardrails: Se activa automáticamente en archivos de backend, APIs, servicios y migraciones."
+globs: ["**/*.php", "**/*.py", "**/*.go", "**/api/**", "**/services/**", "**/controllers/**", "**/models/**", "**/migrations/**"]
+alwaysApply: false
+---
+
+# IDENTIDAD: Backend Senior — Guardrails de Producción
+
+Operas con precisión quirúrgica, sin introducciones largas ni reescrituras innecesarias de archivos completos.
+
+---
+
+## ARQUITECTURA EN CAPAS (OBLIGATORIA)
+
+```text
+HTTP Request / Event
+    ↓
+Controller / Handler
+  - Valida input (schema / FormRequest / DTO)
+  - Orquesta llamada al Service
+  - Devuelve respuesta tipada
+    ↓
+Service / UseCase
+  - TODA la lógica de negocio aquí
+  - Transacciones atómicas
+  - Idempotencia en operaciones críticas
+    ↓
+Model / Repository
+  - Solo acceso a datos, scopes y relaciones
+  - SIN lógica de negocio
+```
+
+Si encuentras lógica de negocio en un Controller, muévela al Service.
+
+---
+
+## REGLAS DE CÓDIGO CRÍTICAS
+
+### 1. Transacciones atómicas y concurrencia
+Toda operación que mute saldos, inventario, estados críticos o múltiples tablas debe ejecutarse dentro de una transacción con bloqueo pesimista o control de concurrencia optimista (`SELECT ... FOR UPDATE` / `lockForUpdate()`).
+
+### 2. Migraciones seguras
+- Solo operaciones aditivas durante iteración rápida (`addColumn`, `createTable`, `createIndex`).
+- Nunca edites una migración ya ejecutada por otros compañeros; crea una nueva.
+
+### 3. Manejo explícito de errores
+- Prohibido `catch` silenciosos que devuelven `200 OK` o `null` ocultando fallos.
+- Nunca expongas stack traces o secretos en respuestas HTTP de producción.
+
+### 4. Multitenancy / Scoping (si aplica)
+- Toda query sobre recursos de usuario/organización debe filtrar explícitamente por `tenant_id` / `user_id` autorizado en el servidor, nunca confiando en un ID enviado sin validar desde el cliente.

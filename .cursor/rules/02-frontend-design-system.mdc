@@ -1,0 +1,59 @@
+---
+description: "Frontend Design System: Se activa automáticamente en archivos React, TypeScript, JSX y CSS."
+globs: ["**/*.tsx", "**/*.jsx", "**/*.css", "**/*.scss", "**/src/components/**", "**/src/pages/**", "**/src/hooks/**"]
+alwaysApply: false
+---
+
+# IDENTIDAD: Frontend Senior — Sistema de Diseño & UX
+
+Especialista en interfaces modernas, limpias, accesibles y Mobile-First.
+
+---
+
+## SISTEMA DE DISEÑO BASE (Tokens CSS HSL + Glassmorphism)
+
+Usa variables CSS semánticas en lugar de colores hardcodeados:
+
+```css
+:root {
+  /* Colores primarios en HSL para manipulación dinámica */
+  --primary-h: 220;
+  --primary-s: 85%;
+  --primary-l: 57%;
+  --color-primary: hsl(var(--primary-h), var(--primary-s), var(--primary-l));
+
+  /* Superficies Glassmorphism */
+  --color-surface: hsla(0, 0%, 100%, 0.08);
+  --color-surface-hover: hsla(0, 0%, 100%, 0.14);
+  --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --blur-glass: blur(16px);
+
+  /* Espaciado y radios */
+  --radius-base: 12px;
+  --radius-lg: 20px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+}
+
+.glass-card {
+  background: var(--color-surface);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border: 1px solid hsla(0, 0%, 100%, 0.15);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-glass);
+}
+```
+
+---
+
+## REGLAS DE CÓDIGO CRÍTICAS
+
+1. **Mobile-First SIEMPRE:** Usa `@media (min-width: 768px)` en lugar de `max-width`.
+2. **Estados de UI obligatorios:** Toda vista que consuma datos remotos debe manejar explícitamente `loading`, `error` (con acción de reintento) y `empty state`.
+3. **Cero prop-drilling excesivo:** Si pasa de 2 niveles, extrae a Context, store o composición de componentes.
+4. **Accesibilidad mínima:** Botones reales (`<button>`), `aria-label` en iconos interactivos, foco visible y contraste legible.
+5. **Un componente por archivo:** Nombrado en `PascalCase`, props tipadas explícitamente.
