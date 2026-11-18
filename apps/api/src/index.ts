@@ -7,6 +7,40 @@ import { PaymentRepo } from './db/payment-repo.js';
 import { migrate, openDb } from './db/sqlite.js';
 import { PeyClient } from './pey/client.js';
 
+function loadLocalEnv(): void {
+  const candidates = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '../../.env'),
+    path.resolve(process.cwd(), '../../../.env'),
+  ];
+  const seen = new Set<string>();
+
+  for (const envPath of candidates) {
+    if (seen.has(envPath) || !fs.existsSync(envPath)) continue;
+    seen.add(envPath);
+
+    const content = fs.readFileSync(envPath, 'utf8');
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eqIdx = line.indexOf('=');
+      if (eqIdx <= 0) continue;
+      const key = line.slice(0, eqIdx).trim();
+      if (!key || process.env[key] !== undefined) continue;
+      let val = line.slice(eqIdx + 1).trim();
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      process.env[key] = val;
+    }
+  }
+}
+
+loadLocalEnv();
+
 const port = Number(process.env.PORT || 3001);
 const peyMode =
   (process.env.PEY_MODE as 'mock' | 'sandbox' | 'live' | undefined) || 'mock';

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  computeClabeCheckDigit,
+  DEMO_CLINIC_BANK_PRESETS,
+  isValidBanxicoClabe,
+  maskClabeLast4,
+  validateBanxicoClabe,
+} from '@codi-pey/contracts';
+import {
   centsEquals,
   PEY_PATHS,
   PeyApiError,
@@ -557,5 +564,76 @@ describe('verifyPaid (C2)', () => {
         },
       }),
     ).toEqual({ ok: false, reason: 'account_mismatch' });
+  });
+});
+
+describe('Banxico CLABE validator (@codi-pey/contracts)', () => {
+  const CLABE_BBVA_VALID = ['012', '180', '01591346', '6252'].join('');
+  const CLABE_AZTECA_VALID = ['127', '180', '01655886', '0385'].join('');
+  const CLABE_17_DIGITS = ['012', '180', '01526225', '713'].join('');
+  const CLABE_SANTANDER_BAD_DIGIT = ['014', '180', '01535568', '2429'].join('');
+  const CLABE_ZERO_BANK = ['000', '180', '01591346', '6250'].join('');
+
+  it('accepts valid BBVA (****6252, digit 2) and Azteca (****0385, digit 5) CLABEs without exposing full 18 digits', () => {
+    const bbva = validateBanxicoClabe(CLABE_BBVA_VALID);
+    expect(bbva).toEqual({
+      valid: true,
+      bankCode: '012',
+      bankName: 'BBVA México',
+      last4: '6252',
+      masked: '****6252',
+      expectedCheckDigit: 2,
+      actualCheckDigit: 2,
+    });
+    expect(JSON.stringify(bbva)).not.toContain(CLABE_BBVA_VALID);
+    expect(isValidBanxicoClabe(CLABE_BBVA_VALID)).toBe(true);
+
+    const azteca = validateBanxicoClabe(CLABE_AZTECA_VALID);
+    expect(azteca).toEqual({
+      valid: true,
+      bankCode: '127',
+      bankName: 'Banco Azteca',
+      last4: '0385',
+      masked: '****0385',
+      expectedCheckDigit: 5,
+      actualCheckDigit: 5,
+    });
+    expect(JSON.stringify(azteca)).not.toContain(CLABE_AZTECA_VALID);
+    expect(isValidBanxicoClabe(CLABE_AZTECA_VALID)).toBe(true);
+  });
+
+  it('rejects 17-digit CLABE (invalid_length) and Santander check digit mismatch (7 vs 9)', () => {
+    const shortRes = validateBanxicoClabe(CLABE_17_DIGITS);
+    expect(shortRes.valid).toBe(false);
+    expect(shortRes.reason).toBe('invalid_length');
+    expect(isValidBanxicoClabe(CLABE_17_DIGITS)).toBe(false);
+
+    const badDigitRes = validateBanxicoClabe(CLABE_SANTANDER_BAD_DIGIT);
+    expect(badDigitRes).toEqual({
+      valid: false,
+      reason: 'check_digit_mismatch',
+      bankCode: '014',
+      bankName: 'Santander',
+      last4: '2429',
+      masked: '****2429',
+      expectedCheckDigit: 7,
+      actualCheckDigit: 9,
+    });
+    expect(isValidBanxicoClabe(CLABE_SANTANDER_BAD_DIGIT)).toBe(false);
+  });
+
+  it('rejects empty, non_numeric, and invalid_bank_code (000) and exposes computeClabeCheckDigit + maskClabeLast4 + DEMO_CLINIC_BANK_PRESETS', () => {
+    expect(validateBanxicoClabe('')).toEqual({ valid: false, reason: 'empty' });
+    expect(validateBanxicoClabe('01218001591346625A')).toEqual({
+      valid: false,
+      reason: 'non_numeric',
+    });
+    expect(validateBanxicoClabe(CLABE_ZERO_BANK).reason).toBe('invalid_bank_code');
+    expect(computeClabeCheckDigit(CLABE_BBVA_VALID.slice(0, 17))).toBe(2);
+    expect(computeClabeCheckDigit(CLABE_AZTECA_VALID.slice(0, 17))).toBe(5);
+    expect(maskClabeLast4(CLABE_BBVA_VALID)).toBe('****6252');
+    expect(maskClabeLast4('0385')).toBe('****0385');
+    expect(DEMO_CLINIC_BANK_PRESETS).toHaveLength(2);
+    expect(DEMO_CLINIC_BANK_PRESETS.map((p) => p.clabeLast4)).toEqual(['6252', '0385']);
   });
 });

@@ -409,4 +409,140 @@ describe('App E2E (SQLite + Kill Switch + Onboarding + Suscripción + Manual Rev
     expect(replay.status).toBe(200);
     expect((await replay.json()).idempotent).toBe(true);
   });
+
+  it('resolves ENV:PEY_DEMO_CLABE_BBVA / AZTECA securely, rejects invalid/mismatched env CLABEs with 422, and exposes demo_presets without 18-digit leaks', async () => {
+    const CLABE_BBVA_VALID = ['012', '180', '01591346', '6252'].join('');
+    const CLABE_AZTECA_VALID = ['127', '180', '01655886', '0385'].join('');
+    const CLABE_17_DIGITS = ['012', '180', '01526225', '713'].join('');
+    const CLABE_SANTANDER_BAD = ['014', '180', '01535568', '2429'].join('');
+
+    const prevBbva = process.env.PEY_DEMO_CLABE_BBVA;
+    const prevAzteca = process.env.PEY_DEMO_CLABE_AZTECA;
+    process.env.PEY_DEMO_CLABE_BBVA = CLABE_BBVA_VALID;
+    process.env.PEY_DEMO_CLABE_AZTECA = CLABE_AZTECA_VALID;
+
+    try {
+      const { db, repo } = setupSqlite();
+      const app = createApp(
+        { peyMode: 'mock', peyWebhookSecret: TEST_SECRET },
+        { db, repo },
+      );
+
+      // 1. GET returns demo_presets without exposing any 18-digit CLABE
+      const getBefore = await app.request('/api/v1/onboarding/bank-account');
+      expect(getBefore.status).toBe(200);
+      const beforeText = await getBefore.text();
+      expect(beforeText).not.toContain(CLABE_BBVA_VALID);
+      expect(beforeText).not.toContain(CLABE_AZTECA_VALID);
+      const beforeJson = JSON.parse(beforeText);
+      expect(beforeJson.demo_presets).toHaveLength(2);
+      expect(beforeJson.demo_presets[0]).toMatchObject({
+        key: 'bbva',
+        clabeLast4: '6252',
+        clabeMasked: '****6252',
+        env_configured: true,
+        env_valid: true,
+      });
+      expect(beforeJson.demo_presets[1]).toMatchObject({
+        key: 'azteca',
+        clabeLast4: '0385',
+        clabeMasked: '****0385',
+        env_configured: true,
+        env_valid: true,
+      });
+
+      // 2. POST with valid ENV:PEY_DEMO_CLABE_BBVA succeeds (201)
+      const bbvaRes = await app.request('/api/v1/onboarding/bank-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clabeLast4: '6252',
+          alias: 'Cuenta Clínica BBVA (Principal)',
+          holderName: 'Clínica Veterinaria Demo KADI (BBVA)',
+          clabeTokenOrEnvRef: 'ENV:PEY_DEMO_CLABE_BBVA',
+        }),
+      });
+      expect(bbvaRes.status).toBe(201);
+      const bbvaJson = await bbvaRes.json();
+      expect(bbvaJson.account.clabe_masked).toBe('****6252');
+
+      // 3. POST with valid ENV:PEY_DEMO_CLABE_AZTECA succeeds (201)
+      const aztecaRes = await app.request('/api/v1/onboarding/bank-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clabeLast4: '0385',
+          alias: 'Cuenta Clínica Azteca (Sucursal)',
+          holderName: 'Clínica Veterinaria Demo KADI (Azteca)',
+          clabeTokenOrEnvRef: 'ENV:PEY_DEMO_CLABE_AZTECA',
+        }),
+      });
+      expect(aztecaRes.status).toBe(201);
+      expect((await aztecaRes.json()).account.clabe_masked).toBe('****0385');
+
+      // 4. POST with mismatched clabeLast4 vs valid env CLABE -> 422 CLABE_LAST4_MISMATCH
+      const mismatchRes = await app.request('/api/v1/onboarding/bank-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clabeLast4: '0385',
+          alias: 'Cuenta Mismatch',
+          holderName: 'Clínica Demo',
+          clabeTokenOrEnvRef: 'ENV:PEY_DEMO_CLABE_BBVA',
+        }),
+      });
+      expect(mismatchRes.status).toBe(422);
+      expect((await mismatchRes.json()).error).toBe('CLABE_LAST4_MISMATCH');
+
+      // 5. POST with invalid env CLABE (17 digits or Santander bad check digit) -> 422 INVALID_BANXICO_CLABE
+      process.env.PEY_DEMO_CLABE_BBVA = CLABE_17_DIGITS;
+      const shortEnvRes = await app.request('/api/v1/onboarding/bank-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clabeLast4: '5713',
+          alias: 'Cuenta Corta',
+          holderName: 'Clínica Demo',
+          clabeTokenOrEnvRef: 'ENV:PEY_DEMO_CLABE_BBVA',
+        }),
+      });
+      expect(shortEnvRes.status).toBe(422);
+      expect((await shortEnvRes.json()).error).toBe('INVALID_BANXICO_CLABE');
+
+      process.env.PEY_DEMO_CLABE_BBVA = CLABE_SANTANDER_BAD;
+      const badDigitEnvRes = await app.request('/api/v1/onboarding/bank-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clabeLast4: '2429',
+          alias: 'Cuenta Santander Bad',
+          holderName: 'Clínica Demo',
+          clabeTokenOrEnvRef: 'ENV:PEY_DEMO_CLABE_BBVA',
+        }),
+      });
+      expect(badDigitEnvRes.status).toBe(422);
+      const badDigitJson = await badDigitEnvRes.json();
+      expect(badDigitJson.error).toBe('INVALID_BANXICO_CLABE');
+      expect(badDigitJson.reason).toBe('check_digit_mismatch');
+
+      // 6. Plaintext 18-digit CLABE in body still returns 400 CLABE_PLAINTEXT_FORBIDDEN
+      const plaintextRes = await app.request('/api/v1/onboarding/bank-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clabeLast4: '6252',
+          alias: 'Cuenta Plaintext',
+          holderName: 'Clínica Demo',
+          clabeTokenOrEnvRef: CLABE_BBVA_VALID,
+        }),
+      });
+      expect(plaintextRes.status).toBe(400);
+      expect((await plaintextRes.json()).error).toBe('CLABE_PLAINTEXT_FORBIDDEN');
+    } finally {
+      if (prevBbva === undefined) delete process.env.PEY_DEMO_CLABE_BBVA;
+      else process.env.PEY_DEMO_CLABE_BBVA = prevBbva;
+      if (prevAzteca === undefined) delete process.env.PEY_DEMO_CLABE_AZTECA;
+      else process.env.PEY_DEMO_CLABE_AZTECA = prevAzteca;
+    }
+  });
 });

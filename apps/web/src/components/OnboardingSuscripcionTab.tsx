@@ -1,9 +1,12 @@
-import type {
-  BankAccountView,
-  PaymentIntent,
-  PaymentMode,
-  PeyBankAccountStatus,
-  SubscriptionPlan,
+import {
+  DEMO_CLINIC_BANK_PRESETS,
+  validateBanxicoClabe,
+  type BankAccountView,
+  type DemoClinicBankPreset,
+  type PaymentIntent,
+  type PaymentMode,
+  type PeyBankAccountStatus,
+  type SubscriptionPlan,
 } from '@codi-pey/contracts';
 import { QRCodeSVG } from 'qrcode.react';
 import { useState } from 'react';
@@ -39,6 +42,25 @@ const BANK_STATUS_BADGES: Record<PeyBankAccountStatus, string> = {
   ERROR: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
 };
 
+const DEFAULT_PRESET = DEMO_CLINIC_BANK_PRESETS[0];
+
+function formatClabeValidationError(reason?: string, expected?: number, actual?: number): string {
+  switch (reason) {
+    case 'empty':
+      return 'Ingresa una CLABE de 18 dígitos para verificarla localmente.';
+    case 'non_numeric':
+      return 'La CLABE solo debe contener dígitos numéricos.';
+    case 'invalid_length':
+      return 'La CLABE debe tener exactamente 18 dígitos.';
+    case 'invalid_bank_code':
+      return 'El código de banco (primeros 3 dígitos) no es válido.';
+    case 'check_digit_mismatch':
+      return `Dígito verificador Banxico inválido (esperado ${expected}, recibido ${actual}).`;
+    default:
+      return 'La CLABE no cumple la validación matemática Banxico.';
+  }
+}
+
 export function OnboardingSuscripcionTab({
   bankAccount,
   loading,
@@ -47,10 +69,13 @@ export function OnboardingSuscripcionTab({
   onRefreshBankStatus,
   onCheckoutSubscription,
 }: OnboardingSuscripcionTabProps) {
-  const [clabeLast4, setClabeLast4] = useState('8998');
-  const [alias, setAlias] = useState('Cuenta Clínica Principal');
-  const [holderName, setHolderName] = useState('Clínica Veterinaria Demo S.A.');
-  const [clabeTokenOrEnvRef, setClabeTokenOrEnvRef] = useState('ENV:CLINIC_CLABE_TOKEN');
+  const [clabeLast4, setClabeLast4] = useState('6252');
+  const [alias, setAlias] = useState(DEFAULT_PRESET.alias);
+  const [holderName, setHolderName] = useState(DEFAULT_PRESET.holderName);
+  const [clabeTokenOrEnvRef, setClabeTokenOrEnvRef] = useState('ENV:PEY_DEMO_CLABE_BBVA');
+  const [localClabeInput, setLocalClabeInput] = useState('');
+  const [localClabeError, setLocalClabeError] = useState<string | null>(null);
+  const [localClabeInfo, setLocalClabeInfo] = useState<string | null>(null);
 
   const [plan, setPlan] = useState<SubscriptionPlan>('mensual');
   const [subMode, setSubMode] = useState<PaymentMode>('payment_link');
@@ -60,10 +85,69 @@ export function OnboardingSuscripcionTab({
     checkout_url: string;
   } | null>(null);
 
+  function applyDemoPreset(preset: DemoClinicBankPreset) {
+    setClabeLast4(preset.clabeLast4);
+    setAlias(preset.alias);
+    setHolderName(preset.holderName);
+    setClabeTokenOrEnvRef(preset.clabeTokenOrEnvRef);
+    setLocalClabeInput('');
+    setLocalClabeError(null);
+    setLocalClabeInfo(null);
+  }
+
+  function handleLocalClabeChange(value: string) {
+    setLocalClabeInput(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setLocalClabeError(null);
+      setLocalClabeInfo(null);
+      return;
+    }
+
+    const check = validateBanxicoClabe(trimmed);
+    if (check.valid && check.last4) {
+      setLocalClabeError(null);
+      setLocalClabeInfo(
+        `CLABE válida: ${check.bankName ?? `Banco ${check.bankCode}`} · ${check.masked}`,
+      );
+      setClabeLast4(check.last4);
+    } else {
+      setLocalClabeInfo(null);
+      setLocalClabeError(
+        formatClabeValidationError(
+          check.reason,
+          check.expectedCheckDigit,
+          check.actualCheckDigit,
+        ),
+      );
+    }
+  }
+
   async function handleBankSubmit(e: React.FormEvent) {
     e.preventDefault();
+    let effectiveLast4 = clabeLast4;
+    if (localClabeInput.trim().length > 0) {
+      const check = validateBanxicoClabe(localClabeInput);
+      if (!check.valid || !check.last4) {
+        setLocalClabeInfo(null);
+        setLocalClabeError(
+          formatClabeValidationError(
+            check.reason,
+            check.expectedCheckDigit,
+            check.actualCheckDigit,
+          ),
+        );
+        return;
+      }
+      effectiveLast4 = check.last4;
+      setClabeLast4(check.last4);
+      setLocalClabeInput('');
+      setLocalClabeError(null);
+      setLocalClabeInfo(null);
+    }
+
     await onRegisterBankAccount({
-      clabeLast4,
+      clabeLast4: effectiveLast4,
       alias,
       holderName,
       clabeTokenOrEnvRef: clabeTokenOrEnvRef.trim() || undefined,
@@ -97,7 +181,54 @@ export function OnboardingSuscripcionTab({
           opera en borrador o cobro manual sin detener la operación.
         </div>
 
+        <div className="space-y-1.5">
+          <p className="text-xs text-slate-400">Perfiles demo locales (sin exponer CLABE completa):</p>
+          <div className="flex flex-wrap gap-2">
+            {DEMO_CLINIC_BANK_PRESETS.map((preset) => {
+              const active =
+                clabeLast4 === preset.clabeLast4 &&
+                clabeTokenOrEnvRef === preset.clabeTokenOrEnvRef;
+              return (
+                <button
+                  key={preset.key}
+                  type="button"
+                  onClick={() => applyDemoPreset(preset)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                    active
+                      ? 'bg-indigo-600/30 border-indigo-400 text-indigo-100'
+                      : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  {preset.bankName} {preset.clabeMasked}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <form onSubmit={handleBankSubmit} className="space-y-3">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1" htmlFor="local-clabe-check">
+              Verificador local de CLABE (18 dígitos · opcional, no se envía por red)
+            </label>
+            <input
+              id="local-clabe-check"
+              type="password"
+              autoComplete="off"
+              inputMode="numeric"
+              placeholder="Opcional: pega 18 dígitos para validar Banxico localmente"
+              value={localClabeInput}
+              onChange={(e) => handleLocalClabeChange(e.target.value)}
+              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-white font-mono"
+            />
+            {localClabeError && (
+              <p className="mt-1 text-xs text-rose-300">{localClabeError}</p>
+            )}
+            {localClabeInfo && (
+              <p className="mt-1 text-xs text-emerald-300">{localClabeInfo}</p>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-slate-400 mb-1" htmlFor="clabe-last4">

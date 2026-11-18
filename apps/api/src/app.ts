@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import {
   CreateIntentInputSchema,
+  DEMO_CLINIC_BANK_PRESETS,
   KillSwitchInputSchema,
   ManualFallbackInputSchema,
   ManualReviewResolveInputSchema,
@@ -11,6 +12,8 @@ import {
   PeyWebhookEventSchema,
   SimulateBankStatusInputSchema,
   SubscriptionCheckoutInputSchema,
+  validateBanxicoClabe,
+  type BanxicoClabeValidationResult,
   type ExternalLedgerPort,
   type LedgerEntry,
   type PaymentIntent,
@@ -89,6 +92,59 @@ function csvCell(value: unknown): string {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;
+}
+
+export type ResolveClabeEnvRefResult =
+  | { ok: true; configured: false }
+  | { ok: true; configured: true; validation: BanxicoClabeValidationResult }
+  | {
+      ok: false;
+      status: 422;
+      error: 'INVALID_BANXICO_CLABE' | 'CLABE_LAST4_MISMATCH';
+      reason?: string;
+      message: string;
+    };
+
+export function resolveClabeEnvRef(
+  clabeTokenOrEnvRef: string | undefined,
+  expectedLast4: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolveClabeEnvRefResult {
+  if (!clabeTokenOrEnvRef || !clabeTokenOrEnvRef.startsWith('ENV:')) {
+    return { ok: true, configured: false };
+  }
+
+  const envVar = clabeTokenOrEnvRef.slice('ENV:'.length).trim();
+  if (!envVar) {
+    return { ok: true, configured: false };
+  }
+
+  const rawValue = env[envVar]?.trim();
+  if (!rawValue || rawValue.startsWith('CHANGE_ME')) {
+    return { ok: true, configured: false };
+  }
+
+  const validation = validateBanxicoClabe(rawValue);
+  if (!validation.valid) {
+    return {
+      ok: false,
+      status: 422,
+      error: 'INVALID_BANXICO_CLABE',
+      reason: validation.reason,
+      message: `La CLABE configurada en ${envVar} no cumple el formato o dígito verificador Banxico (${validation.reason}).`,
+    };
+  }
+
+  if (validation.last4 !== expectedLast4) {
+    return {
+      ok: false,
+      status: 422,
+      error: 'CLABE_LAST4_MISMATCH',
+      message: `Los últimos 4 dígitos de ${envVar} (${validation.masked ?? '****'}) no coinciden con clabeLast4 (****${expectedLast4}).`,
+    };
+  }
+
+  return { ok: true, configured: true, validation };
 }
 
 export function createApp(config: AppConfig, deps: AppDeps = {}) {
@@ -724,10 +780,23 @@ export function createApp(config: AppConfig, deps: AppDeps = {}) {
   });
 
   app.get('/api/v1/onboarding/bank-account', (c) => {
+    const demo_presets = DEMO_CLINIC_BANK_PRESETS.map((preset) => {
+      const envVar = preset.clabeTokenOrEnvRef.slice('ENV:'.length).trim();
+      const rawVal = process.env[envVar]?.trim();
+      const env_configured = Boolean(rawVal && !rawVal.startsWith('CHANGE_ME'));
+      const env_valid = env_configured ? validateBanxicoClabe(rawVal!).valid : false;
+      return {
+        ...preset,
+        env_configured,
+        env_valid,
+      };
+    });
+
     return c.json({
       account: repo.getLatestBankAccount() ?? null,
       accounts: repo.listBankAccounts(),
       banxico_sla_business_days: 5,
+      demo_presets,
     });
   });
 
@@ -760,6 +829,23 @@ export function createApp(config: AppConfig, deps: AppDeps = {}) {
     }
 
     const input = parsed.data;
+    const envCheck = resolveClabeEnvRef(input.clabeTokenOrEnvRef, input.clabeLast4);
+    if (!envCheck.ok) {
+      return c.json(
+        envCheck.error === 'INVALID_BANXICO_CLABE'
+          ? {
+              error: envCheck.error,
+              reason: envCheck.reason,
+              message: envCheck.message,
+            }
+          : {
+              error: envCheck.error,
+              message: envCheck.message,
+            },
+        422,
+      );
+    }
+
     const clabeMasked = `****${input.clabeLast4}`;
 
     if (peyClient && config.peyMode !== 'mock') {
