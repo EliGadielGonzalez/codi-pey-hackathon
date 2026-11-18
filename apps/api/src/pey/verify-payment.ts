@@ -1,5 +1,11 @@
 import type { PeyTransaction, PeyVerifyPayload } from '@codi-pey/contracts';
-import { centsEquals } from './client.js';
+import { centsEquals, toCents } from './client.js';
+
+// [P] validar contra OpenAPI/sandbox antes de uso en vivo
+export type PeyAmountUnit = 'pesos' | 'centavos';
+
+// [P] validar contra OpenAPI/sandbox antes de uso en vivo
+export const PEY_AMOUNT_UNIT: PeyAmountUnit = 'pesos';
 
 export type VerifyPaidReason =
   | 'not_paid'
@@ -19,6 +25,30 @@ export interface VerifyPaidInput {
     expectedMethod: 'CODI' | (string & {});
   };
   payload: PeyVerifyPayload;
+  /** Override for unit testing `'centavos'` vs `'pesos'`; defaults to `PEY_AMOUNT_UNIT`. */
+  amountUnit?: PeyAmountUnit;
+}
+
+/**
+ * Normalizes a raw payload amount (from `amountBreakdown.base` or `amount`) to integer centavos.
+ * Numeric strings (e.g. "250.00") are explicitly rejected as `null` (-> `amount_mismatch`)
+ * to prevent implicit string-to-number coercion ambiguity.
+ */
+function normalizePayloadAmountToCents(rawAmount: unknown, unit: PeyAmountUnit): number | null {
+  if (typeof rawAmount !== 'number' || !Number.isFinite(rawAmount) || rawAmount <= 0) {
+    return null;
+  }
+  if (unit === 'pesos') {
+    try {
+      return toCents(rawAmount);
+    } catch {
+      return null;
+    }
+  }
+  if (!Number.isSafeInteger(rawAmount)) {
+    return null;
+  }
+  return rawAmount;
 }
 
 /**
@@ -28,7 +58,11 @@ export interface VerifyPaidInput {
  * `MANUAL_REVIEW` by the caller rather than marking the intent as paid or
  * silently discarding the discrepancy.
  */
-export function verifyPaid({ intent, payload }: VerifyPaidInput): VerifyPaidResult {
+export function verifyPaid({
+  intent,
+  payload,
+  amountUnit = PEY_AMOUNT_UNIT,
+}: VerifyPaidInput): VerifyPaidResult {
   if (!payload || payload.status !== 'paid') {
     return { ok: false, reason: 'not_paid' };
   }
@@ -57,14 +91,14 @@ export function verifyPaid({ intent, payload }: VerifyPaidInput): VerifyPaidResu
     return { ok: false, reason: 'method_mismatch' };
   }
 
-  // [P] validar contra OpenAPI: verificar si amountBreakdown.base y amount vienen en centavos enteros.
-  const rawAmountCents =
+  const rawAmount =
     subject.amountBreakdown?.base ??
     subject.amount ??
     payload.amountBreakdown?.base ??
     payload.amount;
 
-  if (typeof rawAmountCents !== 'number' || !centsEquals(rawAmountCents, intent.amountCents)) {
+  const normalizedCents = normalizePayloadAmountToCents(rawAmount, amountUnit);
+  if (normalizedCents === null || !centsEquals(normalizedCents, intent.amountCents)) {
     return { ok: false, reason: 'amount_mismatch' };
   }
 

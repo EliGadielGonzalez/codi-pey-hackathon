@@ -7,7 +7,10 @@ import {
   PeyUncertainCreateError,
   toCents,
 } from '../src/pey/client.js';
-import { verifyPaid } from '../src/pey/verify-payment.js';
+import {
+  PEY_AMOUNT_UNIT,
+  verifyPaid,
+} from '../src/pey/verify-payment.js';
 
 const TEST_API_KEY = 'pey_test_secret_key_do_not_leak';
 const TEST_BASE_URL = 'https://sandbox.pey.invalid';
@@ -184,6 +187,47 @@ describe('PeyClient', () => {
     await expect(client.getBankAccount(TEST_BANK_ACCOUNT)).rejects.toBeInstanceOf(PeyApiError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('sanitizes cause on PeyUncertainCreateError and strips headers.Authorization / apiKey', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      const transportErr = Object.assign(
+        new Error(`Socket hangup with Bearer ${TEST_API_KEY}`),
+        {
+          headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+          config: { headers: { Authorization: `Bearer ${TEST_API_KEY}` } },
+        },
+      );
+      throw transportErr;
+    });
+
+    const client = new PeyClient({
+      baseUrl: TEST_BASE_URL,
+      apiKey: TEST_API_KEY,
+      fetchImpl: fetchMock,
+    });
+
+    let caught: unknown;
+    try {
+      await client.createCodiQr({
+        amount: 250.0,
+        clientReferenceId: 'ORD-SANITIZE',
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(PeyUncertainCreateError);
+    const uncertain = caught as PeyUncertainCreateError;
+    expect(uncertain.message).not.toContain(TEST_API_KEY);
+    expect(uncertain.cause).toEqual({
+      name: 'Error',
+      message: 'Socket hangup with Bearer [REDACTED]',
+    });
+    expect(Object.keys(uncertain.cause ?? {})).toEqual(['name', 'message']);
+    expect(JSON.stringify(uncertain.cause)).not.toContain(TEST_API_KEY);
+    expect(JSON.stringify(uncertain.cause)).not.toContain('headers');
+    expect(JSON.stringify(uncertain.cause)).not.toContain('Authorization');
+  });
 });
 
 describe('verifyPaid (C2)', () => {
@@ -193,19 +237,148 @@ describe('verifyPaid (C2)', () => {
     expectedMethod: 'CODI' as const,
   };
 
-  it('returns ok:true for valid QR/PN payload and valid single-tx payment link payload', () => {
+  it('defaults PEY_AMOUNT_UNIT to pesos and validates decimal MXN payloads against centavos intents', () => {
+    expect(PEY_AMOUNT_UNIT).toBe('pesos');
+
+    // 250.00 pesos vs 25000 centavos => ok
+    expect(
+      verifyPaid({
+        intent: {
+          amountCents: 25_000,
+          expectedBankAccountId: TEST_BANK_ACCOUNT,
+          expectedMethod: 'CODI',
+        },
+        payload: {
+          status: 'paid',
+          paymentMethod: 'CODI',
+          amount: 250.0,
+          bankAccountId: TEST_BANK_ACCOUNT,
+        },
+      }),
+    ).toEqual({ ok: true });
+
+    // 19.99 pesos vs 1999 centavos => ok
     expect(
       verifyPaid({
         intent: baseIntent,
         payload: {
           status: 'paid',
           paymentMethod: 'CODI',
-          amountBreakdown: { base: 1999 },
+          amountBreakdown: { base: 19.99 },
           bankAccountId: TEST_BANK_ACCOUNT,
         },
       }),
     ).toEqual({ ok: true });
 
+    // 250 pesos vs 250 centavos => amount_mismatch (prevents 100x underpayment acceptance)
+    expect(
+      verifyPaid({
+        intent: {
+          amountCents: 250,
+          expectedBankAccountId: TEST_BANK_ACCOUNT,
+          expectedMethod: 'CODI',
+        },
+        payload: {
+          status: 'paid',
+          paymentMethod: 'CODI',
+          amount: 250,
+          bankAccountId: TEST_BANK_ACCOUNT,
+        },
+      }),
+    ).toEqual({ ok: false, reason: 'amount_mismatch' });
+
+    // Floating-point rounding: 0.1 + 0.2 pesos vs 30 centavos => ok
+    expect(
+      verifyPaid({
+        intent: {
+          amountCents: 30,
+          expectedBankAccountId: TEST_BANK_ACCOUNT,
+          expectedMethod: 'CODI',
+        },
+        payload: {
+          status: 'paid',
+          paymentMethod: 'CODI',
+          amountBreakdown: { base: 0.1 + 0.2 },
+          bankAccountId: TEST_BANK_ACCOUNT,
+        },
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects zero, negative, NaN, and numeric string amounts in pesos mode (including amountBreakdown.base)', () => {
+    for (const badAmount of [0, -10, Number.NaN, '250.00' as unknown as number]) {
+      expect(
+        verifyPaid({
+          intent: {
+            amountCents: 25_000,
+            expectedBankAccountId: TEST_BANK_ACCOUNT,
+            expectedMethod: 'CODI',
+          },
+          payload: {
+            status: 'paid',
+            paymentMethod: 'CODI',
+            amount: badAmount,
+            bankAccountId: TEST_BANK_ACCOUNT,
+          },
+        }),
+      ).toEqual({ ok: false, reason: 'amount_mismatch' });
+
+      expect(
+        verifyPaid({
+          intent: {
+            amountCents: 25_000,
+            expectedBankAccountId: TEST_BANK_ACCOUNT,
+            expectedMethod: 'CODI',
+          },
+          payload: {
+            status: 'paid',
+            paymentMethod: 'CODI',
+            amountBreakdown: { base: badAmount },
+            amount: 250.0,
+            bankAccountId: TEST_BANK_ACCOUNT,
+          },
+        }),
+      ).toEqual({ ok: false, reason: 'amount_mismatch' });
+    }
+  });
+
+  it('supports centavos mode via optional amountUnit parameter', () => {
+    expect(
+      verifyPaid({
+        intent: {
+          amountCents: 25_000,
+          expectedBankAccountId: TEST_BANK_ACCOUNT,
+          expectedMethod: 'CODI',
+        },
+        payload: {
+          status: 'paid',
+          paymentMethod: 'CODI',
+          amountBreakdown: { base: 25_000 },
+          bankAccountId: TEST_BANK_ACCOUNT,
+        },
+        amountUnit: 'centavos',
+      }),
+    ).toEqual({ ok: true });
+
+    expect(
+      verifyPaid({
+        intent: {
+          amountCents: 25_000,
+          expectedBankAccountId: TEST_BANK_ACCOUNT,
+          expectedMethod: 'CODI',
+        },
+        payload: {
+          status: 'paid',
+          paymentMethod: 'CODI',
+          amount: 250.0,
+          bankAccountId: TEST_BANK_ACCOUNT,
+        },
+        amountUnit: 'centavos',
+      }),
+    ).toEqual({ ok: false, reason: 'amount_mismatch' });
+  });
+
+  it('returns ok:true for valid single-tx payment link payload in pesos', () => {
     expect(
       verifyPaid({
         intent: baseIntent,
@@ -216,7 +389,7 @@ describe('verifyPaid (C2)', () => {
             {
               status: 'paid',
               paymentMethod: 'CODI',
-              amount: 1999,
+              amount: 19.99,
               bankAccountId: TEST_BANK_ACCOUNT,
             },
           ],
@@ -232,7 +405,7 @@ describe('verifyPaid (C2)', () => {
         payload: {
           status: 'pending',
           paymentMethod: 'CODI',
-          amount: 1999,
+          amount: 19.99,
           bankAccountId: TEST_BANK_ACCOUNT,
         },
       }),
@@ -259,13 +432,13 @@ describe('verifyPaid (C2)', () => {
             {
               status: 'paid',
               paymentMethod: 'CODI',
-              amount: 1999,
+              amount: 19.99,
               bankAccountId: TEST_BANK_ACCOUNT,
             },
             {
               status: 'paid',
               paymentMethod: 'CODI',
-              amount: 1999,
+              amount: 19.99,
               bankAccountId: TEST_BANK_ACCOUNT,
             },
           ],
@@ -281,7 +454,7 @@ describe('verifyPaid (C2)', () => {
         payload: {
           status: 'paid',
           paymentMethod: 'CARD',
-          amountBreakdown: { base: 1999 },
+          amountBreakdown: { base: 19.99 },
           bankAccountId: TEST_BANK_ACCOUNT,
         },
       }),
@@ -295,7 +468,7 @@ describe('verifyPaid (C2)', () => {
         payload: {
           status: 'paid',
           paymentMethod: 'CODI',
-          amountBreakdown: { base: 1998 },
+          amountBreakdown: { base: 19.98 },
           bankAccountId: TEST_BANK_ACCOUNT,
         },
       }),
@@ -309,7 +482,7 @@ describe('verifyPaid (C2)', () => {
         payload: {
           status: 'paid',
           paymentMethod: 'CODI',
-          amountBreakdown: { base: 1999 },
+          amountBreakdown: { base: 19.99 },
           bankAccountId: '01OTHERBANKACCOUNT00009999',
         },
       }),

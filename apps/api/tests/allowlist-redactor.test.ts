@@ -136,4 +136,26 @@ describe('allowlistRedact', () => {
     expect(original).toEqual(snapshot);
     expect(redacted).not.toBe(original);
   });
+
+  it('redacts PII-shaped strings (email, phone, spaces) inside allowlisted identifier fields', () => {
+    const input = {
+      id: 'juan@x.com',
+      transactionId: '5512345678',
+      numRef: '+525512345678',
+      clientReferenceId: 'Juan Perez',
+      type: 'type with space',
+      status: 'paid@extra',
+      paymentMethod: 'CODI 01',
+    };
+
+    const redacted = allowlistRedact(input) as Record<string, unknown>;
+
+    expect(redacted.id).toBe(REDACTION_MARKER);
+    expect(redacted.transactionId).toBe(REDACTION_MARKER);
+    expect(redacted.numRef).toBe(REDACTION_MARKER);
+    expect(redacted.clientReferenceId).toBe(REDACTION_MARKER);
+    expect(redacted.type).toBe(REDACTION_MARKER);
+    expect(redacted.status).toBe(REDACTION_MARKER);
+    expect(redacted.paymentMethod).toBe(REDACTION_MARKER);
+  });
 });

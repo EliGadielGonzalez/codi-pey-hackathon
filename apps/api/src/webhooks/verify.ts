@@ -131,8 +131,36 @@ export function verifyStandardWebhook(
   return { ok: false, reason: 'bad_signature' };
 }
 
+export type WebhookVerifyOnceFailureReason = WebhookFailureReason | 'duplicate';
+
+export type WebhookVerifyOnceResult =
+  | { ok: true; webhookId: string }
+  | { ok: false; reason: WebhookVerifyOnceFailureReason };
+
+/**
+ * Verifies a Standard Webhooks signature FIRST and only registers `webhook-id`
+ * in `dedupe` after signature and timestamp verification succeed.
+ */
+export function verifyWebhookOnce(
+  options: VerifyStandardWebhookOptions,
+  dedupe: DedupeStore,
+): WebhookVerifyOnceResult {
+  const verified = verifyStandardWebhook(options);
+  if (!verified.ok) {
+    return verified;
+  }
+  if (dedupe.seen(verified.webhookId)) {
+    return { ok: false, reason: 'duplicate' };
+  }
+  return verified;
+}
+
 /**
  * Deduplication store contract so EXEC-004 can swap in-memory tracking for SQLite.
+ *
+ * SECURITY: `seen()` MUST NEVER be called before signature verification succeeds;
+ * otherwise unauthenticated callers can poison legitimate `webhook-id` values.
+ * Prefer `verifyWebhookOnce(options, dedupe)`.
  */
 export interface DedupeStore {
   seen(id: string): boolean;
@@ -140,6 +168,9 @@ export interface DedupeStore {
 
 /**
  * Bounded in-memory webhook-id deduplication store with FIFO eviction.
+ *
+ * SECURITY: `seen()` mutates state (check + insert). It MUST NEVER be called
+ * before verifying the webhook signature — use `verifyWebhookOnce` instead.
  */
 export class WebhookDedupe implements DedupeStore {
   private readonly ids = new Set<string>();

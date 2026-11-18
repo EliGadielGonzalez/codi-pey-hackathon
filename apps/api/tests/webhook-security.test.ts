@@ -1,6 +1,10 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { verifyStandardWebhook, WebhookDedupe } from '../src/webhooks/verify.js';
+import {
+  verifyStandardWebhook,
+  verifyWebhookOnce,
+  WebhookDedupe,
+} from '../src/webhooks/verify.js';
 
 function makeSignatureHeader(
   webhookId: string,
@@ -173,5 +177,62 @@ describe('WebhookDedupe', () => {
     expect(dedupe.size).toBe(2);
     expect(dedupe.seen('wh_2')).toBe(true);
     expect(dedupe.seen('wh_1')).toBe(false);
+  });
+
+  it('verifyWebhookOnce does not consume webhook-id on invalid signature and rejects replay after valid signature', () => {
+    const whsecSecret = `whsec_${Buffer.from('poison-test-secret-32-bytes-long', 'utf8').toString('base64')}`;
+    const nowSeconds = 1_700_000_000;
+    const ts = String(nowSeconds);
+    const body = '{"id":"evt_poison","status":"paid"}';
+    const dedupe = new WebhookDedupe(10);
+
+    // 1. Invalid signature with legitimate webhook-id must NOT poison dedupe
+    const badAttempt = verifyWebhookOnce(
+      {
+        rawBody: body,
+        secret: whsecSecret,
+        now: nowSeconds,
+        headers: {
+          'webhook-id': 'msg_legit_1',
+          'webhook-timestamp': ts,
+          'webhook-signature': 'v1,invalid_signature',
+        },
+      },
+      dedupe,
+    );
+    expect(badAttempt).toEqual({ ok: false, reason: 'bad_signature' });
+
+    // 2. Same webhook-id with valid signature is accepted once
+    const validSig = makeSignatureHeader('msg_legit_1', ts, body, whsecSecret);
+    const firstValid = verifyWebhookOnce(
+      {
+        rawBody: body,
+        secret: whsecSecret,
+        now: nowSeconds,
+        headers: {
+          'webhook-id': 'msg_legit_1',
+          'webhook-timestamp': ts,
+          'webhook-signature': validSig,
+        },
+      },
+      dedupe,
+    );
+    expect(firstValid).toEqual({ ok: true, webhookId: 'msg_legit_1' });
+
+    // 3. Second delivery with valid signature is rejected as duplicate
+    const secondValid = verifyWebhookOnce(
+      {
+        rawBody: body,
+        secret: whsecSecret,
+        now: nowSeconds,
+        headers: {
+          'webhook-id': 'msg_legit_1',
+          'webhook-timestamp': ts,
+          'webhook-signature': validSig,
+        },
+      },
+      dedupe,
+    );
+    expect(secondValid).toEqual({ ok: false, reason: 'duplicate' });
   });
 });

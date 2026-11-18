@@ -44,16 +44,54 @@ export function centsEquals(aCents: number, bCents: number): boolean {
   return Number.isSafeInteger(aCents) && Number.isSafeInteger(bCents) && aCents === bCents;
 }
 
+export interface SanitizedErrorCause {
+  readonly name: string;
+  readonly message: string;
+}
+
+function sanitizeErrorCause(err: unknown, apiKey: string): SanitizedErrorCause {
+  let rawName = 'Error';
+  let rawMessage = 'Unknown transport error';
+
+  if (err instanceof Error) {
+    if (err.name) rawName = err.name;
+    if (err.message) rawMessage = err.message;
+  } else if (typeof err === 'object' && err !== null) {
+    const maybeName = (err as { name?: unknown }).name;
+    const maybeMessage = (err as { message?: unknown }).message;
+    if (typeof maybeName === 'string' && maybeName) rawName = maybeName;
+    if (typeof maybeMessage === 'string' && maybeMessage) rawMessage = maybeMessage;
+  } else if (typeof err === 'string' && err) {
+    rawMessage = err;
+  }
+
+  const scrub = (text: string): string =>
+    text
+      .split(apiKey)
+      .join('[REDACTED]')
+      .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]');
+
+  return {
+    name: scrub(rawName),
+    message: scrub(rawMessage),
+  };
+}
+
 /**
  * Thrown on POST creation calls when outcome is uncertain (timeout, network error, or HTTP 5xx).
  * Callers MUST NOT auto-retry this operation blindly (Rule C1/RJ-3); reconcile before retrying.
  */
 export class PeyUncertainCreateError extends Error {
   readonly clientReference: string;
-  override readonly cause?: unknown;
+  override readonly cause?: SanitizedErrorCause;
   readonly statusCode?: number;
 
-  constructor(message: string, clientReference: string, cause?: unknown, statusCode?: number) {
+  constructor(
+    message: string,
+    clientReference: string,
+    cause?: SanitizedErrorCause,
+    statusCode?: number,
+  ) {
     super(message);
     this.name = 'PeyUncertainCreateError';
     this.clientReference = clientReference;
@@ -218,7 +256,7 @@ export class PeyClient {
       throw new PeyUncertainCreateError(
         `Pey POST ${path} outcome uncertain due to transport or timeout failure`,
         clientReference,
-        err,
+        sanitizeErrorCause(err, this.apiKey),
       );
     }
 
@@ -234,7 +272,7 @@ export class PeyClient {
       throw new PeyUncertainCreateError(
         `Pey POST ${path} outcome uncertain due to HTTP ${response.status}`,
         clientReference,
-        new Error(`HTTP ${response.status}`),
+        { name: 'HttpError', message: `HTTP ${response.status}` },
         response.status,
       );
     }
@@ -243,7 +281,7 @@ export class PeyClient {
       throw new PeyUncertainCreateError(
         `Pey POST ${path} returned unexpected HTTP ${response.status}`,
         clientReference,
-        new Error(`HTTP ${response.status}`),
+        { name: 'HttpError', message: `HTTP ${response.status}` },
         response.status,
       );
     }
@@ -254,7 +292,7 @@ export class PeyClient {
       throw new PeyUncertainCreateError(
         `Pey POST ${path} returned unreadable JSON response`,
         clientReference,
-        err,
+        sanitizeErrorCause(err, this.apiKey),
         response.status,
       );
     }
