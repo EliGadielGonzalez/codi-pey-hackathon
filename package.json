@@ -2,6 +2,9 @@
   "name": "codi-pey-hackathon",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -10,7 +13,10 @@
     "dev:api": "npm --workspace=@codi-pey/api run dev",
     "dev:web": "npm --workspace=@codi-pey/web run dev",
     "build": "npm --workspace=@codi-pey/contracts run build && npm --workspace=@codi-pey/api run build && npm --workspace=@codi-pey/web run build",
+    "pretest": "npm --workspace=@codi-pey/contracts run build",
     "test": "npm --workspace=@codi-pey/api run test",
+    "check:leaks": "node scripts/check-no-private-leaks.mjs",
+    "pretypecheck": "npm --workspace=@codi-pey/contracts run build",
     "typecheck": "npm --workspace=@codi-pey/contracts run typecheck && npm --workspace=@codi-pey/api run typecheck && npm --workspace=@codi-pey/web run typecheck"
   }
 }

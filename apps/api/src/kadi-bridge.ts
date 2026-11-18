@@ -20,7 +20,8 @@ export async function syncPaymentToKadi(
   });
 
   const base = config.kadiBaseUrl.replace(/\/+$/, '');
-  const url = `${base}/api/v1/cuentas/${encodeURIComponent(intent.kadi_cuenta_id)}/pagos`;
+  const template = process.env.LEDGER_PAYMENT_PATH || '/ledger/accounts/{account_ref}/payments';
+  const url = `${base}${template.replace('{account_ref}', encodeURIComponent(intent.kadi_cuenta_id))}`;
 
   try {
     const res = await fetch(url, {

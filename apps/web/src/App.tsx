@@ -107,7 +107,7 @@ export default function App() {
       <div className="max-w-6xl mx-auto space-y-6">
         <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 border-b border-slate-800 pb-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">CoDi + pey · Terminal de Cobro</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-white">KADI Cobro Clínico · Terminal CoDi (API de Pey)</h1>
             <p className="text-sm text-slate-400">Generador de QR dinámico, Request-to-Pay y monitor de webhooks idempotentes</p>
           </div>
           <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">

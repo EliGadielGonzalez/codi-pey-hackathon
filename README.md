@@ -1,11 +1,11 @@
-# CoDi + pey — Hackathon Cursor
+# KADI Cobro Clínico — Hackathon Cursor
 
-Monorepo del proyecto **CoDi + pey** para el Hackathon de Cursor, inicializado con [cursor-hackathon-kit](https://github.com/EliGadielGonzalez/cursor-hackathon-kit) y alineado con el contrato REST de conciliación de `kadi-hackathon`.
+Monorepo de **KADI Cobro Clínico** para el Hackathon de Cursor, integrado con el API de Pey para pagos CoDi e inicializado con [cursor-hackathon-kit](https://github.com/EliGadielGonzalez/cursor-hackathon-kit).
 
 ## Estructura
 
 - `packages/contracts/` — Esquemas Zod compartidos (`CreateIntentInput`, `PaymentIntent`, `PeyWebhookEvent`, `KadiPaymentSync`).
-- `apps/api/` — API en **Node.js 22 + TypeScript + Hono + Zod + Vitest** (intents CoDi, webhooks pey con HMAC + idempotencia, modo sandbox `mock` y bridge opcional hacia `POST /api/v1/cuentas/{id}/pagos`).
+- `apps/api/` — API en **Node.js 22 + TypeScript + Hono + Zod + Vitest** (intents CoDi, webhooks pey con HMAC + idempotencia, modo sandbox `mock` y puerto opcional hacia un sistema contable externo (`LEDGER_PAYMENT_PATH`)).
 - `apps/web/` — Terminal de cobro CoDi en **React 19 + Vite + TypeScript + Tailwind CSS** (QR dinámico, Request-to-Pay y monitor de webhooks).
 
 ## Inicio rápido
