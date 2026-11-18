@@ -664,6 +664,16 @@ export function createApp(config: AppConfig, deps: AppDeps = {}) {
           nowIso,
         });
       }
+    } else if (event.status === 'processing') {
+      if (intent.state === 'UNCERTAIN_CREATE') {
+        repo.transition(intent.id, 'PENDING_PAYMENT', {
+          actor: 'webhook',
+          event: 'WEBHOOK_PROCESSING_CONFIRMED',
+          detail: { payload: json },
+          nowIso,
+        });
+      }
+      // Monotonic forward guarantee: ignore out-of-order 'processing' once past PENDING_PAYMENT.
     }
 
     repo.recordWebhookLog({

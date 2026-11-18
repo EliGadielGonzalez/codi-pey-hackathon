@@ -62,7 +62,7 @@ export type PaymentIntent = z.infer<typeof PaymentIntentSchema>;
 export const PeyWebhookEventSchema = z.object({
   event_id: z.string().min(1),
   intent_id: z.string().min(1),
-  status: z.enum(['paid', 'failed', 'expired']),
+  status: z.enum(['paid', 'failed', 'expired', 'processing']),
   clave_rastreo: z.string().min(1),
   amount_mxn: z.number().min(0.01),
   paid_at: z.string().optional(),
