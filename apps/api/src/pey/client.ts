@@ -1,10 +1,14 @@
-import type {
-  PeyBankAccountResponse,
-  PeyCodiQrTransactionsResponse,
-  PeyCreateCodiPushInput,
-  PeyCreateCodiQrInput,
-  PeyCreatePaymentLinkInput,
-  PeyResourceResponse,
+import {
+  PeyBankAccountStatusSchema,
+  PeyRegisterBankAccountInputSchema,
+  type PeyBankAccountResponse,
+  type PeyBankAccountStatus,
+  type PeyCodiQrTransactionsResponse,
+  type PeyCreateCodiPushInput,
+  type PeyCreateCodiQrInput,
+  type PeyCreatePaymentLinkInput,
+  type PeyRegisterBankAccountInput,
+  type PeyResourceResponse,
 } from '@codi-pey/contracts';
 
 // [P] validar contra OpenAPI: rutas configurables centralizadas del API de Pey.
@@ -14,8 +18,30 @@ export const PEY_PATHS = {
   createPaymentLink: '/payment-link/create',
   getCodiQrTransactions: '/transaction/codi/qr/:id',
   getPaymentLink: '/payment-link/:id',
+  registerBankAccount: '/bank-account', // [P] validar contra OpenAPI
   getBankAccount: '/bank-account/:id',
 } as const;
+
+export interface PeyBankAccountStatusResult {
+  id: string;
+  bankAccountId: string;
+  status: PeyBankAccountStatus;
+  errorMessage?: string;
+  clabeMasked?: string;
+  alias?: string;
+  holderName?: string;
+}
+
+function normalizeBankAccountStatus(raw: unknown): PeyBankAccountStatus {
+  if (typeof raw === 'string') {
+    const upper = raw.trim().toUpperCase();
+    const parsed = PeyBankAccountStatusSchema.safeParse(upper);
+    if (parsed.success) {
+      return parsed.data;
+    }
+  }
+  return 'ERROR';
+}
 
 export const PEY_DEFAULTS = {
   timeoutMs: 8_000,
@@ -192,6 +218,42 @@ export class PeyClient {
     return this.getWithRetry<PeyBankAccountResponse>(
       resolvePath(PEY_PATHS.getBankAccount, id),
     );
+  }
+
+  // [P] validar contra OpenAPI: alta de cuenta bancaria sin almacenar ni enviar CLABE de 18 digitos en claro.
+  async registerBankAccount(
+    input: PeyRegisterBankAccountInput,
+  ): Promise<PeyBankAccountStatusResult> {
+    const parsed = PeyRegisterBankAccountInputSchema.parse(input);
+    const res = await this.postCreate<PeyBankAccountResponse>(
+      PEY_PATHS.registerBankAccount,
+      parsed,
+      `bank_${parsed.clabeLast4}_${parsed.alias}`,
+    );
+    const bankAccountId = res.bankAccountId || res.id;
+    return {
+      id: res.id || bankAccountId,
+      bankAccountId,
+      status: normalizeBankAccountStatus(res.status ?? 'PENDING'),
+      errorMessage: typeof res.errorMessage === 'string' ? res.errorMessage : undefined,
+      clabeMasked: res.clabeMasked ?? `****${parsed.clabeLast4}`,
+      alias: res.alias ?? parsed.alias,
+      holderName: res.holderName ?? parsed.holderName,
+    };
+  }
+
+  async getBankAccountStatus(id: string): Promise<PeyBankAccountStatusResult> {
+    const res = await this.getBankAccount(id);
+    const bankAccountId = res.bankAccountId || res.id || id;
+    return {
+      id: res.id || bankAccountId,
+      bankAccountId,
+      status: normalizeBankAccountStatus(res.status),
+      errorMessage: typeof res.errorMessage === 'string' ? res.errorMessage : undefined,
+      clabeMasked: typeof res.clabeMasked === 'string' ? res.clabeMasked : undefined,
+      alias: typeof res.alias === 'string' ? res.alias : undefined,
+      holderName: typeof res.holderName === 'string' ? res.holderName : undefined,
+    };
   }
 
   private async fetchWithTimeout(

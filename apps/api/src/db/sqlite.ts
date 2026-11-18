@@ -101,6 +101,50 @@ export function migrate(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_outbox_messages_status_next
       ON outbox_messages(status, next_attempt_at);
+
+    CREATE TABLE IF NOT EXISTS payment_intent_details (
+      intent_id TEXT PRIMARY KEY REFERENCES payment_intents(id),
+      concept TEXT NOT NULL,
+      external_ref TEXT NOT NULL,
+      qr_payload TEXT NOT NULL,
+      payment_link_url TEXT,
+      customer_phone_masked TEXT,
+      kadi_cuenta_id TEXT,
+      kadi_sync_status TEXT NOT NULL DEFAULT 'not_configured',
+      paid_at TEXT,
+      kind TEXT NOT NULL DEFAULT 'clinical',
+      pey_resource_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS webhook_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id TEXT NOT NULL,
+      intent_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      clave_rastreo TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      duplicate INTEGER NOT NULL CHECK (duplicate IN (0, 1))
+    );
+
+    CREATE TABLE IF NOT EXISTS bank_accounts (
+      id TEXT PRIMARY KEY,
+      bank_account_id TEXT NOT NULL UNIQUE,
+      clabe_masked TEXT NOT NULL,
+      alias TEXT NOT NULL,
+      holder_name TEXT NOT NULL,
+      codi_status TEXT NOT NULL CHECK (
+        codi_status IN ('BORRADOR', 'PENDING', 'PROCESSING', 'ACTIVE', 'ERROR')
+      ),
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 

@@ -228,6 +228,76 @@ describe('PeyClient', () => {
     expect(JSON.stringify(uncertain.cause)).not.toContain('headers');
     expect(JSON.stringify(uncertain.cause)).not.toContain('Authorization');
   });
+
+  it('registers bank account via POST /bank-account and reads Banxico status via GET /bank-account/:id', async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method });
+      if (init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            id: '01TESTBANKACCOUNT8998',
+            bankAccountId: '01TESTBANKACCOUNT8998',
+            status: 'PROCESSING',
+            clabeMasked: '****8998',
+          }),
+          { status: 201 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          id: '01TESTBANKACCOUNT8998',
+          bankAccountId: '01TESTBANKACCOUNT8998',
+          status: 'ERROR',
+          errorMessage: 'Validación Banxico pendiente',
+        }),
+        { status: 200 },
+      );
+    });
+
+    const client = new PeyClient({
+      baseUrl: TEST_BASE_URL,
+      apiKey: TEST_API_KEY,
+      fetchImpl: fetchMock,
+    });
+
+    const created = await client.registerBankAccount({
+      clabeLast4: '8998',
+      alias: 'Clínica Norte',
+      holderName: 'Clínica Demo S.A.',
+      clabeTokenOrEnvRef: 'ENV:CLINIC_CLABE_REF',
+    });
+
+    expect(created.bankAccountId).toBe('01TESTBANKACCOUNT8998');
+    expect(created.status).toBe('PROCESSING');
+    expect(created.clabeMasked).toBe('****8998');
+    expect(calls[0].url).toBe(`${TEST_BASE_URL}${PEY_PATHS.registerBankAccount}`);
+
+    const status = await client.getBankAccountStatus('01TESTBANKACCOUNT8998');
+    expect(status.status).toBe('ERROR');
+    expect(status.errorMessage).toBe('Validación Banxico pendiente');
+    expect(calls[1].url).toBe(`${TEST_BASE_URL}/bank-account/01TESTBANKACCOUNT8998`);
+  });
+
+  it('rejects 18-digit CLABE inputs in registerBankAccount', async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const client = new PeyClient({
+      baseUrl: TEST_BASE_URL,
+      apiKey: TEST_API_KEY,
+      fetchImpl: fetchMock,
+    });
+
+    await expect(
+      client.registerBankAccount({
+        clabeLast4: '8998',
+        alias: 'Cuenta',
+        holderName: 'Titular',
+        clabeTokenOrEnvRef: '0'.repeat(18),
+      }),
+    ).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('verifyPaid (C2)', () => {

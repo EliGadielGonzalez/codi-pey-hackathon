@@ -1,1 +1,23 @@
 @import "tailwindcss";
+
+:root {
+  --primary-h: 222;
+  --primary-s: 84%;
+  --primary-l: 56%;
+  --color-primary: hsl(var(--primary-h), var(--primary-s), var(--primary-l));
+  --color-surface: hsla(222, 47%, 13%, 0.72);
+  --color-surface-hover: hsla(222, 47%, 18%, 0.85);
+  --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.25);
+  --blur-glass: blur(16px);
+  --radius-base: 12px;
+  --radius-lg: 20px;
+}
+
+.glass-card {
+  background: var(--color-surface);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border: 1px solid hsla(0, 0%, 100%, 0.12);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-glass);
+}

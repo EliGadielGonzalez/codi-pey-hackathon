@@ -28,6 +28,7 @@ const EXPECTED_VALID_EDGES: ReadonlyArray<[PaymentIntentState, PaymentIntentStat
   ['EXPIRED', 'MANUAL_REVIEW'],
   ['MANUAL_REVIEW', 'APPLIED'],
   ['MANUAL_REVIEW', 'REFUNDED_MANUAL'],
+  ['MANUAL_REVIEW', 'CANCELLED'],
 ];
 
 const VALID_EDGE_SET = new Set(

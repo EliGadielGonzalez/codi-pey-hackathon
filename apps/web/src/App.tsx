@@ -1,47 +1,85 @@
-import type { PaymentIntent, PaymentMode } from '@codi-pey/contracts';
-import { QRCodeSVG } from 'qrcode.react';
+import type {
+  BankAccountView,
+  ManualReviewAction,
+  PaymentIntent,
+  PaymentMode,
+  PeyBankAccountStatus,
+  SubscriptionPlan,
+} from '@codi-pey/contracts';
 import { useCallback, useEffect, useState } from 'react';
+import { ExcepcionesAuditoriaTab } from './components/ExcepcionesAuditoriaTab.js';
+import { OnboardingSuscripcionTab } from './components/OnboardingSuscripcionTab.js';
+import { VentanillaCobroTab } from './components/VentanillaCobroTab.js';
+import type {
+  ActiveTab,
+  LedgerAuditEntry,
+  ManualFallbackReceipt,
+  WebhookLog,
+} from './types.js';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
-interface WebhookLog {
-  event_id: string;
-  intent_id: string;
-  status: string;
-  clave_rastreo: string;
-  received_at: string;
-  duplicate: boolean;
-}
-
 export default function App() {
-  const [amount, setAmount] = useState('250.00');
-  const [concept, setConcept] = useState('Consulta general');
-  const [externalRef, setExternalRef] = useState(`ORD-${Date.now().toString().slice(-5)}`);
-  const [mode, setMode] = useState<PaymentMode>('qr');
-  const [phone, setPhone] = useState('');
-  const [kadiCuentaId, setKadiCuentaId] = useState('');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('ventanilla');
+  const [showPeyBranding, setShowPeyBranding] = useState(true);
 
+  const [codiEnabled, setCodiEnabled] = useState(true);
   const [intents, setIntents] = useState<PaymentIntent[]>([]);
+  const [manualReviewItems, setManualReviewItems] = useState<PaymentIntent[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookLog[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerAuditEntry[]>([]);
+  const [bankAccount, setBankAccount] = useState<BankAccountView | null>(null);
+
   const [selected, setSelected] = useState<PaymentIntent | null>(null);
+  const [manualReceipt, setManualReceipt] = useState<ManualFallbackReceipt | null>(null);
   const [loading, setLoading] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshData = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/payments/codi/intents`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setIntents(data.items || []);
-      setWebhooks(data.webhooks || []);
-      if (selected) {
-        const updated = (data.items || []).find((i: PaymentIntent) => i.intent_id === selected.intent_id);
-        if (updated) setSelected(updated);
+      const [intentsRes, reviewRes, bankRes, killRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/payments/codi/intents`),
+        fetch(`${API_BASE}/api/v1/payments/codi/manual-review`),
+        fetch(`${API_BASE}/api/v1/onboarding/bank-account`),
+        fetch(`${API_BASE}/api/v1/config/kill-switch`),
+      ]);
+
+      if (intentsRes.ok) {
+        const data = await intentsRes.json();
+        const items: PaymentIntent[] = data.items || [];
+        setIntents(items);
+        setWebhooks(data.webhooks || []);
+        setLedgerEntries(data.ledger || []);
+        if (typeof data.codi_enabled === 'boolean') {
+          setCodiEnabled(data.codi_enabled);
+        }
+        setSelected((prev) => {
+          if (!prev) return null;
+          return items.find((i) => i.intent_id === prev.intent_id) ?? prev;
+        });
+      }
+
+      if (reviewRes.ok) {
+        const reviewData = await reviewRes.json();
+        setManualReviewItems(reviewData.items || []);
+      }
+
+      if (bankRes.ok) {
+        const bankData = await bankRes.json();
+        setBankAccount(bankData.account ?? null);
+      }
+
+      if (killRes.ok) {
+        const killData = await killRes.json();
+        if (typeof killData.enabled === 'boolean') {
+          setCodiEnabled(killData.enabled);
+        }
       }
     } catch {
-      // Silencioso en polling si la API aún no arranca
+      // Silencioso en polling si la API local aún no arranca
     }
-  }, [selected]);
+  }, []);
 
   useEffect(() => {
     refreshData();
@@ -49,30 +87,28 @@ export default function App() {
     return () => clearInterval(timer);
   }, [refreshData]);
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleCreateIntent(input: {
+    amount_mxn: number;
+    concept: string;
+    external_ref: string;
+    mode: PaymentMode;
+    customer_phone?: string;
+    kadi_cuenta_id?: string;
+  }) {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/api/v1/payments/codi/intents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount_mxn: Number(amount),
-          concept,
-          external_ref: externalRef,
-          mode,
-          customer_phone: mode === 'request_to_pay' ? phone : undefined,
-          kadi_cuenta_id: kadiCuentaId.trim() || undefined,
-        }),
+        body: JSON.stringify(input),
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data?.error || 'Error al crear intent CoDi');
+        setError(data?.message || data?.error || 'Error al emitir cobro CoDi');
         return;
       }
       setSelected(data);
-      setExternalRef(`ORD-${Date.now().toString().slice(-5)}`);
       await refreshData();
     } catch {
       setError('No se pudo conectar con la API local');
@@ -96,7 +132,204 @@ export default function App() {
       if (data.intent) setSelected(data.intent);
       await refreshData();
     } catch {
-      setError('Error al simular webhook pey');
+      setError('Error al simular webhook Pey');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleReconcileNow() {
+    setReconciling(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/payments/codi/reconcile`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        setError('No se pudo ejecutar la reconciliación');
+        return;
+      }
+      await refreshData();
+    } catch {
+      setError('Error de red al verificar pago');
+    } finally {
+      setReconciling(false);
+    }
+  }
+
+  async function handleActivateManualFallback(
+    intent: PaymentIntent | null,
+    method: 'efectivo' | 'tarjeta' | 'transferencia',
+    note: string,
+  ) {
+    setLoading(true);
+    setError(null);
+    try {
+      if (intent && intent.status === 'pending') {
+        await fetch(`${API_BASE}/api/v1/payments/codi/intents/${intent.intent_id}/manual-fallback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ method, note }),
+        });
+      }
+      setManualReceipt({
+        intentId: intent?.intent_id ?? 'MANUAL_CAJA',
+        method,
+        amountMxn: intent?.amount_mxn ?? 0,
+        concept: intent?.concept ?? note,
+        recordedAt: new Date().toISOString(),
+      });
+      await refreshData();
+    } catch {
+      setError('No se pudo registrar el respaldo manual');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRegisterBankAccount(input: {
+    clabeLast4: string;
+    alias: string;
+    holderName: string;
+    clabeTokenOrEnvRef?: string;
+  }) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/onboarding/bank-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.message || data?.error || 'Error al vincular cuenta');
+        return;
+      }
+      setBankAccount(data.account);
+      await refreshData();
+    } catch {
+      setError('Error al conectar onboarding bancario');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSimulateBankStatus(
+    id: string,
+    status: PeyBankAccountStatus,
+    errorMessage?: string,
+  ) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/onboarding/bank-account/${id}/simulate-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, errorMessage }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error || 'No se pudo actualizar estado bancario');
+        return;
+      }
+      setBankAccount(data.account);
+    } catch {
+      setError('Error al simular estado Banxico');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRefreshBankStatus(id: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/onboarding/bank-account/${id}/refresh`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (res.ok && data.account) {
+        setBankAccount(data.account);
+      }
+    } catch {
+      setError('Error al consultar estado de cuenta bancaria');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCheckoutSubscription(input: {
+    plan: SubscriptionPlan;
+    mode: PaymentMode;
+    customer_phone?: string;
+    clinic_name?: string;
+  }): Promise<{ intent: PaymentIntent; checkout_url: string } | null> {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/subscriptions/checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.message || data?.error || 'Error al generar checkout');
+        return null;
+      }
+      setSelected(data.intent);
+      await refreshData();
+      return { intent: data.intent, checkout_url: data.checkout_url };
+    } catch {
+      setError('Error de red al generar suscripción');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleToggleKillSwitch(enabled: boolean) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/config/kill-switch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCodiEnabled(data.enabled);
+      }
+    } catch {
+      setError('No se pudo actualizar el Kill Switch');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResolveManualReview(
+    intentId: string,
+    action: ManualReviewAction,
+    note: string,
+  ) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/payments/codi/manual-review/${intentId}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, note }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.message || data?.error || 'Error al resolver excepción');
+        return;
+      }
+      await refreshData();
+    } catch {
+      setError('Error al resolver revisión manual');
     } finally {
       setLoading(false);
     }
@@ -105,221 +338,134 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-6">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 border-b border-slate-800 pb-4">
+        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-800 pb-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">KADI Cobro Clínico · Terminal CoDi (API de Pey)</h1>
-            <p className="text-sm text-slate-400">Generador de QR dinámico, Request-to-Pay y monitor de webhooks idempotentes</p>
+            <h1 className="text-xl md:text-2xl font-bold tracking-tight text-white">
+              {showPeyBranding
+                ? 'KADI Cobro Clínico · Impulsado por CoDi® y Pey (0% comisión)'
+                : 'KADI Cobro Clínico · Terminal de Pagos'}
+            </h1>
+            <p className="text-xs md:text-sm text-slate-400">
+              Cobro clínico verificable en servidor, libro append-only SQLite WAL y cero custodia de fondos
+            </p>
           </div>
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            API: {API_BASE}
-          </span>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPeyBranding((v) => !v)}
+              className="rounded-full px-3 py-1 text-xs font-medium bg-slate-900 border border-slate-700 text-slate-300 hover:bg-slate-800 transition"
+            >
+              {showPeyBranding ? 'Co-branding Pey: ON' : 'Co-branding Pey: OFF'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleToggleKillSwitch(!codiEnabled)}
+              className={`rounded-full px-3 py-1 text-xs font-semibold border transition ${
+                codiEnabled
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
+                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+              }`}
+            >
+              {codiEnabled ? 'CoDi Activo' : 'CoDi Apagado (Kill Switch)'}
+            </button>
+          </div>
         </header>
 
+        <nav className="flex flex-wrap gap-2" aria-label="Secciones principales">
+          <button
+            type="button"
+            onClick={() => setActiveTab('ventanilla')}
+            className={`rounded-lg px-4 py-2 text-xs md:text-sm font-semibold transition ${
+              activeTab === 'ventanilla'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            Ventanilla de Cobro
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('onboarding')}
+            className={`rounded-lg px-4 py-2 text-xs md:text-sm font-semibold transition ${
+              activeTab === 'onboarding'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            Onboarding Bancario y Suscripción
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('auditoria')}
+            className={`rounded-lg px-4 py-2 text-xs md:text-sm font-semibold transition flex items-center gap-2 ${
+              activeTab === 'auditoria'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <span>Excepciones y Auditoría</span>
+            {manualReviewItems.length > 0 && (
+              <span className="rounded-full bg-amber-500 text-slate-950 px-1.5 py-0.5 text-[10px] font-bold">
+                {manualReviewItems.length}
+              </span>
+            )}
+          </button>
+        </nav>
+
         {error && (
-          <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 p-3 text-sm text-rose-300">
-            {error}
+          <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 p-3 text-sm text-rose-300 flex items-center justify-between gap-2">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-xs text-rose-200 underline"
+            >
+              Cerrar
+            </button>
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <form onSubmit={handleCreate} className="rounded-xl bg-slate-900/70 border border-slate-800 p-5 space-y-4">
-            <h2 className="text-lg font-semibold text-white">Nuevo Cobro CoDi</h2>
+        {activeTab === 'ventanilla' && (
+          <VentanillaCobroTab
+            codiEnabled={codiEnabled}
+            intents={intents}
+            selected={selected}
+            loading={loading}
+            reconciling={reconciling}
+            onSelectIntent={setSelected}
+            onCreateIntent={handleCreateIntent}
+            onSimulatePay={handleSimulatePay}
+            onReconcileNow={handleReconcileNow}
+            onActivateManualFallback={handleActivateManualFallback}
+            manualReceipt={manualReceipt}
+          />
+        )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Monto (MXN)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  max="8000"
-                  required
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Modalidad</label>
-                <select
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value as PaymentMode)}
-                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-                >
-                  <option value="qr">QR Dinámico</option>
-                  <option value="request_to_pay">Request-to-Pay (Celular)</option>
-                </select>
-              </div>
-            </div>
+        {activeTab === 'onboarding' && (
+          <OnboardingSuscripcionTab
+            bankAccount={bankAccount}
+            loading={loading}
+            onRegisterBankAccount={handleRegisterBankAccount}
+            onSimulateBankStatus={handleSimulateBankStatus}
+            onRefreshBankStatus={handleRefreshBankStatus}
+            onCheckoutSubscription={handleCheckoutSubscription}
+          />
+        )}
 
-            <div>
-              <label className="block text-xs text-slate-400 mb-1">Concepto (máx. 40 caracteres)</label>
-              <input
-                type="text"
-                maxLength={40}
-                required
-                value={concept}
-                onChange={(e) => setConcept(e.target.value)}
-                className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Referencia Externa</label>
-                <input
-                  type="text"
-                  required
-                  value={externalRef}
-                  onChange={(e) => setExternalRef(e.target.value)}
-                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Cuenta KADI (opcional)</label>
-                <input
-                  type="text"
-                  placeholder="ID de cuenta"
-                  value={kadiCuentaId}
-                  onChange={(e) => setKadiCuentaId(e.target.value)}
-                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-                />
-              </div>
-            </div>
-
-            {mode === 'request_to_pay' && (
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Teléfono cliente (10 dígitos)</label>
-                <input
-                  type="tel"
-                  pattern="\d{10}"
-                  required
-                  placeholder="5512345678"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-                />
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition"
-            >
-              {loading ? 'Generando...' : 'Generar Intent CoDi'}
-            </button>
-          </form>
-
-          <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-5 flex flex-col justify-between">
-            {selected ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono text-slate-400">{selected.intent_id}</span>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                      selected.status === 'paid'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'bg-amber-500/20 text-amber-300'
-                    }`}
-                  >
-                    {selected.status.toUpperCase()}
-                  </span>
-                </div>
-
-                <div className="flex flex-col items-center bg-white p-4 rounded-xl w-fit mx-auto">
-                  <QRCodeSVG value={selected.qr_payload} size={180} />
-                </div>
-
-                <div className="text-sm space-y-1 text-slate-300">
-                  <p>
-                    <strong>Monto:</strong> ${selected.amount_mxn.toFixed(2)} MXN
-                  </p>
-                  <p>
-                    <strong>Concepto:</strong> {selected.concept}
-                  </p>
-                  {selected.clave_rastreo && (
-                    <p>
-                      <strong>Clave de rastreo:</strong> <span className="font-mono">{selected.clave_rastreo}</span>
-                    </p>
-                  )}
-                  <p>
-                    <strong>Sync KADI:</strong> {selected.kadi_sync_status}
-                  </p>
-                </div>
-
-                {selected.status === 'pending' && (
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={() => handleSimulatePay(selected.intent_id)}
-                    className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition"
-                  >
-                    Simular Pago CoDi (Sandbox Mock)
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="h-full flex items-center justify-center text-sm text-slate-500 py-12">
-                Genera un cobro para visualizar el QR dinámico CoDi.
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <section className="rounded-xl bg-slate-900/70 border border-slate-800 p-5">
-            <h3 className="text-sm font-semibold text-white mb-3">Historial de Intents ({intents.length})</h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {intents.length === 0 ? (
-                <p className="text-xs text-slate-500">Sin cobros registrados aún.</p>
-              ) : (
-                intents.map((item) => (
-                  <button
-                    key={item.intent_id}
-                    type="button"
-                    onClick={() => setSelected(item)}
-                    className="w-full text-left rounded-lg bg-slate-950/80 hover:bg-slate-800/80 border border-slate-800 p-3 flex items-center justify-between text-xs"
-                  >
-                    <div>
-                      <p className="font-semibold text-white">
-                        ${item.amount_mxn.toFixed(2)} · {item.concept}
-                      </p>
-                      <p className="text-slate-400 font-mono">{item.intent_id}</p>
-                    </div>
-                    <span className={item.status === 'paid' ? 'text-emerald-400 font-semibold' : 'text-amber-400'}>
-                      {item.status}
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-xl bg-slate-900/70 border border-slate-800 p-5">
-            <h3 className="text-sm font-semibold text-white mb-3">Monitor de Webhooks pey ({webhooks.length})</h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {webhooks.length === 0 ? (
-                <p className="text-xs text-slate-500">Sin eventos recibidos aún.</p>
-              ) : (
-                webhooks.map((w, idx) => (
-                  <div
-                    key={`${w.event_id}-${idx}`}
-                    className="rounded-lg bg-slate-950/80 border border-slate-800 p-3 text-xs flex items-center justify-between"
-                  >
-                    <div>
-                      <p className="font-mono text-slate-200">{w.event_id}</p>
-                      <p className="text-slate-400">Rastreo: {w.clave_rastreo}</p>
-                    </div>
-                    <span className={w.duplicate ? 'text-amber-400' : 'text-emerald-400'}>
-                      {w.duplicate ? 'IDEMPOTENT_DUP' : w.status}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        </div>
+        {activeTab === 'auditoria' && (
+          <ExcepcionesAuditoriaTab
+            codiEnabled={codiEnabled}
+            manualReviewItems={manualReviewItems}
+            ledgerEntries={ledgerEntries}
+            webhooks={webhooks}
+            exportCsvUrl={`${API_BASE}/api/v1/payments/codi/export.csv`}
+            loading={loading}
+            onToggleKillSwitch={handleToggleKillSwitch}
+            onResolveManualReview={handleResolveManualReview}
+          />
+        )}
       </div>
     </div>
   );

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 // [P] validar contra OpenAPI: esquemas y tipos provisionales del API de Pey.
 
 export interface PeyAmountBreakdown {
@@ -73,6 +75,8 @@ export interface PeyResourceResponse {
   id: string;
   status?: string;
   type?: string;
+  url?: string;
+  qrPayload?: string;
   amount?: number;
   amountBreakdown?: PeyAmountBreakdown;
   paymentMethod?: string;
@@ -92,9 +96,45 @@ export interface PeyCodiQrTransactionsResponse {
   [key: string]: unknown;
 }
 
+export const PeyBankAccountStatusSchema = z.enum([
+  'BORRADOR',
+  'PENDING',
+  'PROCESSING',
+  'ACTIVE',
+  'ERROR',
+]);
+
+export type PeyBankAccountStatus = z.infer<typeof PeyBankAccountStatusSchema>;
+
+const NO_18_DIGIT_PATTERN = /(?<!\d)\d{18}(?!\d)/;
+
+// [P] validar contra OpenAPI: registro de cuenta bancaria sin exponer CLABE completa en claro.
+export const PeyRegisterBankAccountInputSchema = z
+  .object({
+    clabeLast4: z.string().regex(/^\d{4}$/, 'clabeLast4 debe tener exactamente 4 dígitos'),
+    alias: z.string().trim().min(1).max(80),
+    holderName: z.string().trim().min(1).max(120),
+    clabeTokenOrEnvRef: z.string().trim().min(1).max(160).optional(),
+  })
+  .refine(
+    (data) =>
+      !NO_18_DIGIT_PATTERN.test(data.alias) &&
+      !NO_18_DIGIT_PATTERN.test(data.holderName) &&
+      (!data.clabeTokenOrEnvRef || !NO_18_DIGIT_PATTERN.test(data.clabeTokenOrEnvRef)),
+    {
+      message: 'No se permite enviar CLABE de 18 dígitos en claro',
+    },
+  );
+
+export type PeyRegisterBankAccountInput = z.infer<typeof PeyRegisterBankAccountInputSchema>;
+
 export interface PeyBankAccountResponse {
   id: string;
   bankAccountId?: string;
-  status?: string;
+  status?: PeyBankAccountStatus | (string & {});
+  clabeMasked?: string;
+  alias?: string;
+  holderName?: string;
+  errorMessage?: string | null;
   [key: string]: unknown;
 }
